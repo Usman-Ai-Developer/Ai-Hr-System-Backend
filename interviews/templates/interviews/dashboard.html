@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>HR Dashboard</title>
+    <style>
+        body {
+            font-family: Arial;
+            background: #f4f6f9;
+            padding: 20px;
+        }
+
+        h2 {
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+            text-align: center;
+        }
+
+        th {
+            background: #007bff;
+            color: white;
+        }
+
+        tr:hover {
+            background: #f1f1f1;
+        }
+
+        .good {
+            color: green;
+            font-weight: bold;
+        }
+
+        .average {
+            color: orange;
+            font-weight: bold;
+        }
+
+        .bad {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h2>AI HR Dashboard</h2>
+
+    <table>
+        <tr>
+            <th>Name</th>
+            <th>Interview ID</th>
+            <th>English</th>
+            <th>Confidence</th>
+            <th>Experience</th>
+            <th>Communication</th>
+            <th>Overall</th>
+            <th>Status</th>
+            <th>Action</th>
+        </tr>
+
+        {% for c in candidates %}
+        <tr>
+            <td>{{ c.candidate_name }}</td>
+            <td>{{ c.interview_id }}</td>
+
+            <td class="{% if c.english_score > 70 %}good{% elif c.english_score > 40 %}average{% else %}bad{% endif %}">
+                {{ c.english_score }}
+            </td>
+
+            <td>{{ c.confidence_score }}</td>
+            <td>{{ c.experience_score }}</td>
+            <td>{{ c.communication_score }}</td>
+
+            <td class="{% if c.overall_score > 70 %}good{% elif c.overall_score > 50 %}average{% else %}bad{% endif %}">
+                {{ c.overall_score }}
+            </td>
+            <td>{{ c.status }}</td>
+
+            <td>
+                <form method="post" action="/api/interview/update-status/">
+                    {% csrf_token %}
+                    <input type="hidden" name="interview_id" value="{{ c.interview_id }}">
+
+                    <button name="status" value="shortlisted">✔</button>
+                    <button name="status" value="rejected">❌</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+
+    </table>
+
+</body>
+
+</html>

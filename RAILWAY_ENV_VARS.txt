@@ -1,0 +1,40 @@
+# ============================================================
+# RAILWAY ENVIRONMENT VARIABLES — Backend Service
+# Set these in Railway → your project → Variables tab
+# ============================================================
+
+# Django
+SECRET_KEY=generate-a-long-random-string-here
+DEBUG=False
+ALLOWED_HOSTS=your-backend.up.railway.app
+
+# Database — Railway auto-provides this when you add the Postgres plugin
+# Leave blank; Railway injects DATABASE_URL automatically
+DATABASE_URL=
+
+# Redis — Railway auto-provides this when you add the Redis plugin
+# Leave blank; Railway injects REDIS_URL automatically
+REDIS_URL=
+
+# CORS — your Vercel frontend URL (no trailing slash)
+CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
+
+# Groq
+GROQ_API_KEY=your-groq-api-key
+
+# Cloudinary (sign up free at cloudinary.com)
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+
+# ============================================================
+# RAILWAY ENVIRONMENT VARIABLES — Celery Worker Service
+# The worker needs the same vars as the backend.
+# In Railway, link it to the same environment or copy these:
+# ============================================================
+# SECRET_KEY         (same as above)
+# DEBUG              (same as above)
+# DATABASE_URL       (Railway injects automatically)
+# REDIS_URL          (Railway injects automatically)
+# GROQ_API_KEY       (same as above)
+# CLOUDINARY_*       (same as above)
