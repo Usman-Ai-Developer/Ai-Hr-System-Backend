@@ -1,10 +1,10 @@
-# accounts/urls.py
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     RegisterView,
     LogoutView,
     MeView,
-    MeAvatarView,          # ✅ add this import
+    MeAvatarView,
     MyTokenObtainPairView,
     hr_dashboard
 )
