@@ -7,9 +7,11 @@ from django.db import transaction
 from django.db.models import Avg
 from django.conf import settings
 from ai_services.llm import call_groq, extract_json_from_llm_response
-from ai_analysis.utils import (
-    extract_audio, speech_to_text, compute_facial_confidence, correct_transcript
-)
+
+# NOTE: ai_analysis.utils is NOT imported at module level.
+# It imports cv2/whisper/deepface which are not installed on the web server.
+# All utils imports happen inside the task function body below.
+
 from interviews.models import InterviewSession, InterviewAnswer
 from .models import AIAnalysis
 
@@ -24,8 +26,18 @@ logger = logging.getLogger(__name__)
 def evaluate_interview_from_file_task(self, session_id: str):
     """
     Gather all Q&A, transcribe & correct videos, compute facial confidence,
-    send to Groq, save analysis, and DELETE all video/audio files.
+    send to Groq, save analysis, and delete all video/audio files.
+    Heavy ML imports (cv2, whisper, deepface) happen here — inside the task —
+    so Django's web server startup never touches them.
     """
+    # Import ML utilities here, not at module level
+    from ai_analysis.utils import (
+        extract_audio,
+        speech_to_text,
+        compute_facial_confidence,
+        correct_transcript,
+    )
+
     try:
         session = InterviewSession.objects.get(id=session_id)
     except InterviewSession.DoesNotExist:
@@ -54,13 +66,11 @@ def evaluate_interview_from_file_task(self, session_id: str):
                     logger.info(f"Audio extracted to: {audio_path}")
                     raw_transcript = speech_to_text(audio_path)
                     logger.info(f"Raw transcription length: {len(raw_transcript)}")
-                    # ✅ Correct ASR mistakes before storing
                     transcript = correct_transcript(raw_transcript)
                     logger.info(f"Corrected transcription length: {len(transcript)}")
                     ans.transcript = transcript
                     ans.save(update_fields=['transcript'])
 
-                    # Compute facial confidence
                     confidence = compute_facial_confidence(video_path)
                     logger.info(f"Facial confidence: {confidence}")
                     ans.confidence_score = confidence
@@ -81,7 +91,7 @@ def evaluate_interview_from_file_task(self, session_id: str):
         qa_lines.append(f"Answer: {transcript}")
         qa_lines.append("")
 
-        # Delete the original video file
+        # Delete original video file after processing
         if video_path and os.path.exists(video_path):
             try:
                 os.remove(video_path)
@@ -98,8 +108,7 @@ def evaluate_interview_from_file_task(self, session_id: str):
         temp_path = f.name
 
     try:
-        prompt = f"""
-You are an AI HR evaluator. Below is a complete interview transcript.
+        prompt = f"""You are an AI HR evaluator. Below is a complete interview transcript.
 Analyze the candidate's answers and provide a JSON response with:
 - overall technical score (0-100)
 - communication score (0-100)
@@ -124,7 +133,7 @@ Return ONLY valid JSON with these exact keys:
     "summary": "summary text",
     "feedback": "feedback text"
 }}
-please dont be too strick on scoring
+Please don't be too strict on scoring.
 """
         response = call_groq(prompt, temperature=0.3)
         logger.info(f"Groq response for session {session_id}: {response[:200]}...")
@@ -148,17 +157,16 @@ please dont be too strick on scoring
 
         with transaction.atomic():
             analysis, _ = AIAnalysis.objects.get_or_create(interview=session)
-            analysis.technical_score = result.get("technical_score", 0)
-            analysis.communication_score = result.get("communication_score", 0)
-            analysis.avg_english_score = result.get("english_score", 0)
-            analysis.avg_relevance_score = result.get("relevance_score", 0)
-            analysis.confidence_score = avg_facial_confidence
-            analysis.strengths = result.get("strengths", "")
-            analysis.weaknesses = result.get("weaknesses", "")
-            analysis.overall_summary = result.get("summary", "")
-            analysis.candidate_feedback = result.get("feedback", "")
-
-            analysis.detailed_breakdown = {
+            analysis.technical_score      = result.get("technical_score", 0)
+            analysis.communication_score  = result.get("communication_score", 0)
+            analysis.avg_english_score    = result.get("english_score", 0)
+            analysis.avg_relevance_score  = result.get("relevance_score", 0)
+            analysis.confidence_score     = avg_facial_confidence
+            analysis.strengths            = result.get("strengths", "")
+            analysis.weaknesses           = result.get("weaknesses", "")
+            analysis.overall_summary      = result.get("summary", "")
+            analysis.candidate_feedback   = result.get("feedback", "")
+            analysis.detailed_breakdown   = {
                 "per_question": [
                     {
                         "question": ans.question_text,
@@ -177,7 +185,7 @@ please dont be too strick on scoring
                 analysis.avg_relevance_score +
                 analysis.confidence_score
             ) / 5
-            application.ai_score = round(overall)  # use round(), not int() — avoids truncating e.g. 79.9 -> 79
+            application.ai_score = round(overall)
             application.save(update_fields=['ai_score'])
 
         logger.info(f"Analysis saved for session {session_id}")

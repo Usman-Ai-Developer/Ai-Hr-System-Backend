@@ -2,19 +2,24 @@
 import os
 import subprocess
 import logging
-from ai_services.llm import call_groq
 
+# NOTE: cv2, numpy, whisper, DeepFace are NOT imported at module level.
+# They are only imported inside the functions that use them.
+# This keeps Django startup lightweight on the web server —
+# these libraries are only needed in Celery worker tasks.
+
+from ai_services.llm import call_groq
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded on first call to speech_to_text().
-# Loading at module level runs during Django/Celery boot — avoid it.
+# Lazy-loaded Whisper model — only initialised on first transcription call.
 _whisper_model = None
 
 
 def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:
+        import whisper  # imported here, not at module level
         logger.info("Loading Whisper model (first use)...")
         _whisper_model = whisper.load_model("base")
     return _whisper_model
@@ -22,25 +27,25 @@ def _get_whisper_model():
 
 def extract_audio(video_path: str) -> str:
     """
-    Extract audio from video file, apply noise reduction and speech enhancement,
-    and return path to cleaned WAV file.
+    Extract audio from video, apply noise reduction and normalisation,
+    and return path to a cleaned 16kHz mono WAV file.
     """
     audio_path = os.path.splitext(video_path)[0] + "_clean.wav"
     cmd = [
         "ffmpeg",
         "-i", video_path,
-        "-vn",                     # no video
-        "-acodec", "pcm_s16le",    # 16-bit PCM
-        "-ar", "16000",            # 16kHz sample rate
-        "-ac", "1",                # mono
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", "16000",
+        "-ac", "1",
         "-af", (
-            "highpass=f=80,"       # remove low-frequency rumble
-            "lowpass=f=3000,"      # reduce high-frequency hiss
-            "afftdn=nr=10:nf=-30," # noise reduction using FFT
-            "loudnorm,"            # normalize loudness
-            "volume=1.5"           # boost quiet audio
+            "highpass=f=80,"
+            "lowpass=f=3000,"
+            "afftdn=nr=10:nf=-30,"
+            "loudnorm,"
+            "volume=1.5"
         ),
-        "-y",                       # overwrite
+        "-y",
         audio_path
     ]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -55,37 +60,43 @@ def speech_to_text(audio_path: str) -> str:
 
 def compute_facial_confidence(video_path: str) -> float:
     """
-    Extract frames from video, run emotion detection,
-    and return a confidence score (0‑100) that penalises
-    negative emotions (fear, sad, angry, disgust).
-    DeepFace returns percentages (0‑100), so we map
-    (positive% - negative%) directly to 0‑100.
+    Sample frames evenly across the video, run DeepFace emotion detection,
+    and return a confidence score (0-100).
+    Positive emotions (happy, neutral, surprise) raise the score;
+    negative emotions (fear, angry, sad, disgust) lower it.
     """
-    import cv2
-    import numpy as np
-    from deepface import DeepFace
+    import cv2          # heavy — imported here only
+    import numpy as np  # heavy — imported here only
+    from deepface import DeepFace  # heavy — imported here only
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.error("Cannot open video: %s", video_path)
         return 50.0
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    sample_count = min(10, total_frames)
+    if sample_count == 0:
+        cap.release()
+        return 50.0
+
+    # Sample evenly across the full video duration
+    indices = np.linspace(0, total_frames - 1, sample_count, dtype=int)
+
     positive_emotions = ['happy', 'neutral', 'surprise']
     negative_emotions = ['fear', 'angry', 'sad', 'disgust']
-
     positive_sum = {e: 0.0 for e in positive_emotions}
     negative_sum = {e: 0.0 for e in negative_emotions}
     valid_detections = 0
 
-    # Try to read up to 10 frames (no skipping, just sequential)
-    for _ in range(10):
+    for idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
         ret, frame = cap.read()
         if not ret:
-            break
+            continue
 
-        temp_img = f"{video_path}_frame_.jpg"
+        temp_img = f"{video_path}_frame_{idx}.jpg"
         cv2.imwrite(temp_img, frame)
-
         try:
             results = DeepFace.analyze(
                 img_path=temp_img,
@@ -94,16 +105,15 @@ def compute_facial_confidence(video_path: str) -> float:
                 silent=True,
                 detector_backend='opencv',
             )
-            if isinstance(results, list) and len(results) > 0:
+            if isinstance(results, list) and results:
                 emotions = results[0]['emotion']
                 for e in positive_emotions:
                     positive_sum[e] += emotions.get(e, 0)
                 for e in negative_emotions:
                     negative_sum[e] += emotions.get(e, 0)
                 valid_detections += 1
-                logger.info("Frame emotions: %s", {k: f"{v:.1f}" for k, v in emotions.items()})
         except Exception as e:
-            logger.warning("Frame analysis failed: %s", e)
+            logger.warning("Frame %d analysis failed: %s", idx, e)
         finally:
             if os.path.exists(temp_img):
                 os.remove(temp_img)
@@ -113,24 +123,18 @@ def compute_facial_confidence(video_path: str) -> float:
     if valid_detections == 0:
         return 50.0
 
-    # Average the sums (percentages)
     avg_pos = sum(positive_sum.values()) / valid_detections
     avg_neg = sum(negative_sum.values()) / valid_detections
-    raw = avg_pos - avg_neg  # range: -100 to +100
-
-    # Map to 0‑100 (e.g. 0% positive, 100% negative -> 0 confidence;
-    #                100% positive, 0% negative -> 100 confidence;
-    #                equal -> 50)
-    confidence = (raw + 100) / 2
+    raw = avg_pos - avg_neg          # -100 to +100
+    confidence = (raw + 100) / 2    # map to 0-100
     return round(max(0.0, min(100.0, confidence)), 1)
-# ai_analysis/utils.py (add this function)
+
 
 def correct_transcript(transcript: str) -> str:
     """Fix ASR errors and minor grammar issues using Groq."""
     if not transcript or transcript.startswith("[No transcript") or transcript.startswith("[Transcription failed"):
-        return transcript  # keep placeholders unchanged
-    prompt = f"""
-Please correct any speech-to-text errors, punctuation, and minor grammar mistakes in the following interview answer.
+        return transcript
+    prompt = f"""Please correct any speech-to-text errors, punctuation, and minor grammar mistakes in the following interview answer.
 Return ONLY the corrected text, no extra commentary.
 
 Original: "{transcript}"
@@ -140,4 +144,4 @@ Original: "{transcript}"
         return corrected.strip()
     except Exception as e:
         logger.error(f"Transcript correction failed: {e}")
-        return transcript  # fallback to original
+        return transcript
