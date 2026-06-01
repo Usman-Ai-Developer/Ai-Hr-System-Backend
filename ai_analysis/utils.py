@@ -2,10 +2,6 @@
 import os
 import subprocess
 import logging
-import cv2
-import numpy as np
-import whisper
-from deepface import DeepFace
 from ai_services.llm import call_groq
 
 
